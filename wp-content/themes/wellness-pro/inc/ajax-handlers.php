@@ -56,43 +56,56 @@ add_action('wp_ajax_nopriv_wellness_load_more',  'wellness_load_more_cb');
 function wellness_subscribe_cb() {
     check_ajax_referer('wellness-pro-nonce', 'nonce');
 
-    $email = sanitize_email($_POST['email'] ?? '');
+    $email  = sanitize_email($_POST['email'] ?? '');
+    $source = sanitize_text_field($_POST['source'] ?? 'website');
+
     if (!is_email($email)) {
         wp_send_json_error(['message' => 'Please enter a valid email address.']);
     }
 
+    // ── 1. Save to local WordPress database ──────────────────
+    global $wpdb;
+    $table = $wpdb->prefix . 'wellness_subscribers';
+
+    $existing = $wpdb->get_var( $wpdb->prepare(
+        "SELECT id FROM $table WHERE email = %s", $email
+    ) );
+
+    if ($existing) {
+        wp_send_json_success(['message' => 'You are already subscribed. Thank you!']);
+    }
+
+    $wpdb->insert(
+        $table,
+        [
+            'email'         => $email,
+            'source'        => $source,
+            'status'        => 'subscribed',
+            'ip'            => sanitize_text_field( $_SERVER['REMOTE_ADDR'] ?? '' ),
+            'subscribed_at' => current_time('mysql'),
+        ],
+        ['%s', '%s', '%s', '%s', '%s']
+    );
+
+    // ── 2. Also sync to Mailchimp if configured (optional) ───
     $api_key = get_theme_mod('mailchimp_api_key', '');
     $list_id = get_theme_mod('mailchimp_list_id', '');
 
-    if (!$api_key || !$list_id) {
-        wp_send_json_error(['message' => 'Newsletter is not configured yet. Please contact the site admin.']);
+    if ($api_key && $list_id) {
+        $dc  = substr($api_key, strpos($api_key, '-') + 1);
+        $url = "https://{$dc}.api.mailchimp.com/3.0/lists/{$list_id}/members/" . md5(strtolower($email));
+        wp_remote_request($url, [
+            'method'  => 'PUT',
+            'headers' => [
+                'Authorization' => 'Basic ' . base64_encode('anystring:' . $api_key),
+                'Content-Type'  => 'application/json',
+            ],
+            'body'    => wp_json_encode(['email_address' => $email, 'status_if_new' => 'subscribed']),
+            'timeout' => 10,
+        ]);
     }
 
-    $dc  = substr($api_key, strpos($api_key, '-') + 1);
-    $url = "https://{$dc}.api.mailchimp.com/3.0/lists/{$list_id}/members/" . md5(strtolower($email));
-
-    $response = wp_remote_request($url, [
-        'method'  => 'PUT',
-        'headers' => [
-            'Authorization' => 'Basic ' . base64_encode('anystring:' . $api_key),
-            'Content-Type'  => 'application/json',
-        ],
-        'body'    => wp_json_encode(['email_address' => $email, 'status_if_new' => 'subscribed']),
-        'timeout' => 10,
-    ]);
-
-    if (is_wp_error($response)) {
-        wp_send_json_error(['message' => 'Connection error. Please try again later.']);
-    }
-
-    $code = wp_remote_retrieve_response_code($response);
-    if ($code === 200 || $code === 201) {
-        wp_send_json_success(['message' => 'Thank you for subscribing!']);
-    }
-
-    $body = json_decode(wp_remote_retrieve_body($response), true);
-    $msg  = isset($body['detail']) ? $body['detail'] : 'Something went wrong. Please try again.';
-    wp_send_json_error(['message' => $msg]);
+    wp_send_json_success(['message' => 'Thank you for subscribing!']);
 }
 add_action('wp_ajax_wellness_subscribe',        'wellness_subscribe_cb');
 add_action('wp_ajax_nopriv_wellness_subscribe',  'wellness_subscribe_cb');

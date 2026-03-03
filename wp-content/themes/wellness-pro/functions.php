@@ -7,6 +7,39 @@
 require_once get_template_directory() . '/inc/custom-post-types.php';
 require_once get_template_directory() . '/inc/ajax-handlers.php';
 require_once get_template_directory() . '/inc/customizer.php';
+require_once get_template_directory() . '/inc/admin-subscribers.php';
+
+/**
+ * Create custom DB tables (runs on theme switch + version bump)
+ */
+function wellness_create_tables() {
+    global $wpdb;
+    $charset_collate = $wpdb->get_charset_collate();
+
+    // Subscribers table
+    $sql = "CREATE TABLE {$wpdb->prefix}wellness_subscribers (
+  id bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+  email varchar(200) NOT NULL,
+  source varchar(50) NOT NULL DEFAULT 'website',
+  status varchar(20) NOT NULL DEFAULT 'subscribed',
+  ip varchar(45) DEFAULT NULL,
+  subscribed_at datetime NOT NULL,
+  PRIMARY KEY  (id),
+  UNIQUE KEY email (email)
+) $charset_collate;";
+
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+    dbDelta( $sql );
+    update_option( 'wellness_db_version', '1.0' );
+}
+add_action( 'after_switch_theme', 'wellness_create_tables' );
+
+// Also ensure table exists on every load (if version not set)
+add_action( 'init', function() {
+    if ( get_option('wellness_db_version') !== '1.0' ) {
+        wellness_create_tables();
+    }
+} );
 
 /**
  * Enqueue assets
